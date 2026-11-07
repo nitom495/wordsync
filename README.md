@@ -2,6 +2,12 @@
 
 2–5 人联机文字小游戏：各自提交词语，统一揭晓，逐轮靠拢，直到所有人想到同一个词。页面使用原生 HTML、CSS、JavaScript 和 Vite；Firebase 匿名登录与 Firestore 负责多人同步。
 
+## 在线试玩
+
+网站已发布到 [https://nitom495.github.io/wordsync/](https://nitom495.github.io/wordsync/)。创建房间后可复制邀请链接；朋友在手机或电脑打开链接，输入昵称即可加入。房间最多 5 人，至少 2 人才能开局。
+
+线上使用 Firebase 项目 `wordsync-84ead` 的 Spark 免费计划。Firestore 数据库位于 `asia-east2`（香港）；访问权限由本仓库的 `firestore.rules` 控制。
+
 ## 本地启动
 
 需要 Node.js 24 和 pnpm 11。复制 `.env.example` 为 `.env.local`，填入 Firebase 控制台中 Web 应用的配置：
