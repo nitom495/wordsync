@@ -128,3 +128,19 @@ test('host removes an unsubmitted third player', async () => {
     names: { alice: '小安', bob: '小波' },
   }));
 });
+
+test('kick cannot replace a member or silently rename another member', async () => {
+  await seed(roomPath, room({
+    memberIds: ['alice', 'bob', 'carol'],
+    names: { alice: '小安', bob: '小波', carol: '小可' },
+  }));
+  const alice = env.authenticatedContext('alice').firestore();
+  await assertFails(alice.doc(roomPath).update({
+    action: 'kick', memberIds: ['alice', 'mallory'],
+    names: { alice: '小安', bob: '小波' },
+  }));
+  await assertFails(alice.doc(roomPath).update({
+    action: 'kick', memberIds: ['alice', 'bob'],
+    names: { alice: '改名', bob: '小波' },
+  }));
+});
