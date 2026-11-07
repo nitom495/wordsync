@@ -1,0 +1,131 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function nameOk(s) { return s is string && s.size() >= 1 && s.size() <= 12; }
+    function wordOk(s) { return s is string && s.size() >= 1 && s.size() <= 20; }
+    function roomPath(code) { return /databases/$(database)/documents/rooms/$(code); }
+    function wordPath(code, data, uid) {
+      return /databases/$(database)/documents/rooms/$(code)/games/$(data.game)/rounds/$(data.round)/submissions/$(uid);
+    }
+    function changedOnly(fields) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields); }
+    function member(data) { return signedIn() && data.memberIds.hasAny([request.auth.uid]); }
+    function host(data) { return signedIn() && data.hostUid == request.auth.uid; }
+    function wordAt(code, data, i) { return get(wordPath(code, data, data.memberIds[i])).data.word; }
+    function allSame(code, data) {
+      return data.memberIds.size() >= 2
+        && wordAt(code, data, 0) == wordAt(code, data, 1)
+        && (data.memberIds.size() < 3 || wordAt(code, data, 0) == wordAt(code, data, 2))
+        && (data.memberIds.size() < 4 || wordAt(code, data, 0) == wordAt(code, data, 3))
+        && (data.memberIds.size() < 5 || wordAt(code, data, 0) == wordAt(code, data, 4));
+    }
+    match /rooms/{code} {
+      allow get: if signedIn();
+      allow list, delete: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['hostUid', 'phase', 'memberIds', 'names', 'game', 'round', 'submitted', 'revealSeconds', 'revealedAt', 'createdAt', 'action'])
+        && request.resource.data.action == 'create'
+        && request.resource.data.hostUid == request.auth.uid
+        && request.resource.data.phase == 'lobby'
+        && request.resource.data.memberIds == [request.auth.uid]
+        && request.resource.data.names.keys() == [request.auth.uid]
+        && nameOk(request.resource.data.names[request.auth.uid])
+        && request.resource.data.game == 0 && request.resource.data.round == 0
+        && request.resource.data.submitted == []
+        && request.resource.data.revealSeconds == 15
+        && request.resource.data.revealedAt == null
+        && request.resource.data.createdAt == request.time;
+      allow update: if signedIn() && (
+        (request.resource.data.action == 'join' && resource.data.phase == 'lobby'
+          && !resource.data.memberIds.hasAny([request.auth.uid])
+          && resource.data.memberIds.size() < 5
+          && changedOnly(['action', 'memberIds', 'names'])
+          && request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1
+          && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+          && request.resource.data.memberIds.hasAny([request.auth.uid])
+          && request.resource.data.names.diff(resource.data.names).affectedKeys().hasOnly([request.auth.uid])
+          && request.resource.data.names.keys().size() == resource.data.names.keys().size() + 1
+          && nameOk(request.resource.data.names[request.auth.uid]))
+        ||
+        (request.resource.data.action == 'duration' && host(resource.data) && resource.data.phase == 'lobby'
+          && changedOnly(['action', 'revealSeconds'])
+          && request.resource.data.revealSeconds in [15, 30, 45])
+        ||
+        (request.resource.data.action == 'start' && host(resource.data) && resource.data.phase in ['lobby', 'finished']
+          && resource.data.memberIds.size() >= 2 && resource.data.memberIds.size() <= 5
+          && changedOnly(['action', 'phase', 'game', 'round', 'submitted', 'revealedAt'])
+          && request.resource.data.phase == 'input'
+          && request.resource.data.game == resource.data.game + 1
+          && request.resource.data.round == 1
+          && request.resource.data.submitted == []
+          && request.resource.data.revealedAt == null)
+        ||
+        (request.resource.data.action == 'submit' && member(resource.data) && resource.data.phase == 'input'
+          && !resource.data.submitted.hasAny([request.auth.uid])
+          && changedOnly(['action', 'submitted'])
+          && request.resource.data.submitted.size() == resource.data.submitted.size() + 1
+          && request.resource.data.submitted.hasAll(resource.data.submitted)
+          && request.resource.data.submitted.hasAny([request.auth.uid])
+          && getAfter(wordPath(code, resource.data, request.auth.uid)).data.uid == request.auth.uid)
+        ||
+        (request.resource.data.action == 'reveal' && member(resource.data) && resource.data.phase == 'input'
+          && resource.data.submitted.size() == resource.data.memberIds.size()
+          && resource.data.submitted.hasAll(resource.data.memberIds)
+          && changedOnly(['action', 'phase', 'revealedAt'])
+          && request.resource.data.phase == 'reveal'
+          && request.resource.data.revealedAt == request.time)
+        ||
+        (request.resource.data.action == 'finish' && member(resource.data) && resource.data.phase == 'reveal'
+          && changedOnly(['action', 'phase'])
+          && request.resource.data.phase == 'finished'
+          && allSame(code, resource.data))
+        ||
+        (request.resource.data.action == 'next' && member(resource.data) && resource.data.phase == 'reveal'
+          && request.time >= resource.data.revealedAt + duration.value(resource.data.revealSeconds, 's')
+          && !allSame(code, resource.data)
+          && changedOnly(['action', 'phase', 'round', 'submitted', 'revealedAt'])
+          && request.resource.data.phase == 'input'
+          && request.resource.data.round == resource.data.round + 1
+          && request.resource.data.submitted == []
+          && request.resource.data.revealedAt == null)
+        ||
+        (request.resource.data.action == 'kick' && host(resource.data) && resource.data.phase == 'input'
+          && changedOnly(['action', 'memberIds', 'names'])
+          && request.resource.data.memberIds.size() == resource.data.memberIds.size() - 1
+          && request.resource.data.memberIds.size() >= 2
+          && request.resource.data.memberIds.hasAll(resource.data.submitted)
+          && request.resource.data.memberIds.hasAny([request.auth.uid])
+          && request.resource.data.names.keys().size() == request.resource.data.memberIds.size()
+          && request.resource.data.names.diff(resource.data.names).removedKeys().size() == 1)
+        ||
+        (request.resource.data.action == 'cancel' && host(resource.data) && resource.data.phase == 'input'
+          && resource.data.memberIds.size() == 2
+          && changedOnly(['action', 'phase', 'memberIds', 'names', 'round', 'submitted'])
+          && request.resource.data.phase == 'lobby'
+          && request.resource.data.memberIds == [request.auth.uid]
+          && request.resource.data.names.keys() == [request.auth.uid]
+          && request.resource.data.round == 0
+          && request.resource.data.submitted == [])
+      );
+      match /games/{game}/rounds/{round}/submissions/{uid} {
+        function room() { return get(roomPath(code)).data; }
+        allow get: if signedIn() && member(room())
+          && (request.auth.uid == uid
+            || (resource.data.game == room().game
+              && resource.data.round == room().round
+              && room().phase in ['reveal', 'finished']));
+        allow list: if signedIn() && member(room()) && room().phase in ['reveal', 'finished'];
+        allow create: if signedIn() && request.auth.uid == uid
+          && member(room()) && room().phase == 'input'
+          && room().game == request.resource.data.game
+          && room().round == request.resource.data.round
+          && !room().submitted.hasAny([uid])
+          && request.resource.data.keys().hasOnly(['uid', 'word', 'game', 'round'])
+          && request.resource.data.uid == uid
+          && wordOk(request.resource.data.word)
+          && getAfter(roomPath(code)).data.submitted.hasAny([uid]);
+        allow update, delete: if false;
+      }
+    }
+  }
+}
